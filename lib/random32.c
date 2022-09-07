@@ -38,6 +38,9 @@
 #include <linux/jiffies.h>
 #include <linux/random.h>
 #include <linux/sched.h>
+#include <linux/bitops.h>
+#include <linux/slab.h>
+#include <linux/notifier.h>
 #include <asm/unaligned.h>
 
 /**
@@ -547,6 +550,11 @@ static void prandom_reseed(struct timer_list *unused)
 static void prandom_timer_start(struct random_ready_callback *unused)
 {
 	mod_timer(&seed_timer, jiffies);
+static int prandom_timer_start(struct notifier_block *nb,
+			       unsigned long action, void *data)
+{
+	mod_timer(&seed_timer, jiffies);
+	return 0;
 }
 
 /*
@@ -562,6 +570,13 @@ static int __init prandom_init_late(void)
 
 	if (ret == -EALREADY) {
 		prandom_timer_start(&random_ready);
+	static struct notifier_block random_ready = {
+		.notifier_call = prandom_timer_start
+	};
+	int ret = register_random_ready_notifier(&random_ready);
+
+	if (ret == -EALREADY) {
+		prandom_timer_start(&random_ready, 0, NULL);
 		ret = 0;
 	}
 	return ret;

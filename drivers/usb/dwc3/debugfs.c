@@ -819,8 +819,7 @@ static void dwc3_debugfs_create_endpoint_files(struct dwc3_ep *dep,
 	}
 }
 
-static void dwc3_debugfs_create_endpoint_dir(struct dwc3_ep *dep,
-		struct dentry *parent)
+void dwc3_debugfs_create_endpoint_dir(struct dwc3_ep *dep)
 {
 	struct dentry		*dir;
 
@@ -1020,6 +1019,10 @@ const struct file_operations dwc3_gadget_dbg_events_fops = {
 	.llseek		= seq_lseek,
 	.release	= single_release,
 };
+
+	dir = debugfs_create_dir(dep->name, dep->dwc->root);
+	dwc3_debugfs_create_endpoint_files(dep, dir);
+}
 
 void dwc3_debugfs_init(struct dwc3 *dwc)
 {
