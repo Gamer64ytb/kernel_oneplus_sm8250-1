@@ -5196,6 +5196,9 @@ struct usbpd *usbpd_create(struct device *parent)
 
 	pd->pps_disabled = device_property_read_bool(parent,
 				"qcom,pps-disabled");
+#ifdef OPLUS_CUSTOM_OP_DEF
+	pd->probe_done = true;
+#endif
 	pd->current_pr = PR_NONE;
 	pd->current_dr = DR_NONE;
 	list_add_tail(&pd->instance, &_usbpd);
