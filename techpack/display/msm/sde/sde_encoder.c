@@ -1,6 +1,5 @@
 /*
- * Copyright (c) 2014-2021, The Linux Foundation. All rights reserved.
- * Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2014-2020, The Linux Foundation. All rights reserved.
  * Copyright (C) 2013 Red Hat
  * Author: Rob Clark <robdclark@gmail.com>
  *
@@ -247,6 +246,7 @@ enum sde_enc_rc_states {
  * @recovery_events_enabled:	status of hw recovery feature enable by client
  * @elevated_ahb_vote:		increase AHB bus speed for the first frame
  *				after power collapse
+ * @pm_qos_cpu_req:		pm_qos request for cpu frequency
  * @mode_info:                  stores the current mode and should be used
  *				 only in commit phase
  */
@@ -324,6 +324,7 @@ struct sde_encoder_virt {
 
 	bool recovery_events_enabled;
 	bool elevated_ahb_vote;
+	struct pm_qos_request pm_qos_cpu_req;
 	struct msm_mode_info mode_info;
 };
 
@@ -343,6 +344,44 @@ void sde_encoder_uidle_enable(struct drm_encoder *drm_enc, bool enable)
 			phys->hw_ctl->ops.uidle_enable(phys->hw_ctl, enable);
 		}
 	}
+}
+
+static void _sde_encoder_pm_qos_add_request(struct drm_encoder *drm_enc,
+	struct sde_kms *sde_kms)
+{
+	struct sde_encoder_virt *sde_enc = to_sde_encoder_virt(drm_enc);
+	struct pm_qos_request *req;
+	u32 cpu_mask;
+	u32 cpu_dma_latency;
+	int cpu;
+
+	if (!sde_kms->catalog || !sde_kms->catalog->perf.cpu_mask)
+		return;
+
+	cpu_mask = sde_kms->catalog->perf.cpu_mask;
+	cpu_dma_latency = sde_kms->catalog->perf.cpu_dma_latency;
+
+	req = &sde_enc->pm_qos_cpu_req;
+	req->type = PM_QOS_REQ_AFFINE_CORES;
+	cpumask_empty(&req->cpus_affine);
+	for_each_possible_cpu(cpu) {
+		if ((1 << cpu) & cpu_mask)
+			cpumask_set_cpu(cpu, &req->cpus_affine);
+	}
+	pm_qos_add_request(req, PM_QOS_CPU_DMA_LATENCY, cpu_dma_latency);
+
+	SDE_EVT32_VERBOSE(DRMID(drm_enc), cpu_mask, cpu_dma_latency);
+}
+
+static void _sde_encoder_pm_qos_remove_request(struct drm_encoder *drm_enc,
+	struct sde_kms *sde_kms)
+{
+	struct sde_encoder_virt *sde_enc = to_sde_encoder_virt(drm_enc);
+
+	if (!sde_kms->catalog || !sde_kms->catalog->perf.cpu_mask)
+		return;
+
+	pm_qos_remove_request(&sde_enc->pm_qos_cpu_req);
 }
 
 static bool _sde_encoder_is_autorefresh_enabled(
@@ -2280,7 +2319,13 @@ static int _sde_encoder_resource_control_helper(struct drm_encoder *drm_enc,
 		/* enable all the irq */
 		_sde_encoder_irq_control(drm_enc, true);
 
+		if (is_cmd_mode)
+			_sde_encoder_pm_qos_add_request(drm_enc, sde_kms);
+
 	} else {
+		if (is_cmd_mode)
+			_sde_encoder_pm_qos_remove_request(drm_enc, sde_kms);
+
 		/* disable all the irq */
 		_sde_encoder_irq_control(drm_enc, false);
 
@@ -4486,46 +4531,6 @@ bool sde_encoder_check_curr_mode(struct drm_encoder *drm_enc, u32 mode)
 	return (disp_info->curr_panel_mode == mode);
 }
 
-void sde_encoder_trigger_rsc_state_change(struct drm_encoder *drm_enc)
-{
-	struct sde_encoder_virt *sde_enc = NULL;
-	int ret = 0;
-
-	sde_enc = to_sde_encoder_virt(drm_enc);
-
-	if (!sde_enc)
-		return;
-
-	mutex_lock(&sde_enc->rc_lock);
-	/*
-	 * In dual display case when secondary comes out of
-	 * idle make sure RSC solver mode is disabled before
-	 * setting CTL_PREPARE.
-	 */
-	if (!sde_enc->cur_master ||
-		!sde_encoder_check_curr_mode(drm_enc, MSM_DISPLAY_CMD_MODE) ||
-		sde_enc->disp_info.display_type == SDE_CONNECTOR_PRIMARY ||
-		sde_enc->rc_state != SDE_ENC_RC_STATE_IDLE)
-		goto end;
-
-	/* enable all the clks and resources */
-	ret = _sde_encoder_resource_control_helper(drm_enc, true);
-	if (ret) {
-		SDE_ERROR_ENC(sde_enc, "rc in state %d\n", sde_enc->rc_state);
-		SDE_EVT32(DRMID(drm_enc), sde_enc->rc_state, SDE_EVTLOG_ERROR);
-		goto end;
-	}
-
-	_sde_encoder_update_rsc_client(drm_enc, true);
-
-	SDE_EVT32(DRMID(drm_enc), sde_enc->rc_state, SDE_ENC_RC_STATE_ON);
-	sde_enc->rc_state = SDE_ENC_RC_STATE_ON;
-
-end:
-	mutex_unlock(&sde_enc->rc_lock);
-}
-
-
 void sde_encoder_trigger_kickoff_pending(struct drm_encoder *drm_enc)
 {
 	struct sde_encoder_virt *sde_enc;
@@ -5423,7 +5428,7 @@ void sde_encoder_helper_get_pp_line_count(struct drm_encoder *drm_enc,
 		if (phys && phys->hw_intf && phys->hw_pp
 				&& phys->hw_intf->ops.get_vsync_info) {
 			ret = phys->hw_intf->ops.get_vsync_info(
-						phys->hw_intf, &info[i], true);
+						phys->hw_intf, &info[i]);
 			if (!ret) {
 				info[i].pp_idx = phys->hw_pp->idx - PINGPONG_0;
 				info[i].intf_idx = phys->hw_intf->idx - INTF_0;

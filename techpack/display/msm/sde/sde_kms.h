@@ -305,7 +305,10 @@ struct sde_kms {
 	bool first_kickoff;
 	bool qdss_enabled;
 
+	cpumask_t irq_cpu_mask;
 	struct pm_qos_request pm_qos_irq_req;
+	struct irq_affinity_notify affinity_notify;
+	bool pm_qos_irq_req_en;
 };
 
 /**
@@ -470,11 +473,7 @@ void *sde_debugfs_get_root(struct sde_kms *sde_kms);
  * These functions/definitions allow for building up a 'sde_info' structure
  * containing one or more "key=value\n" entries.
  */
-#if IS_ENABLED(CONFIG_DRM_LOW_MSM_MEM_FOOTPRINT)
-#define SDE_KMS_INFO_MAX_SIZE	(1 << 12)
-#else
-#define SDE_KMS_INFO_MAX_SIZE	(1 << 14)
-#endif
+#define SDE_KMS_INFO_MAX_SIZE	4096
 
 /**
  * struct sde_kms_info - connector information structure container
